@@ -509,7 +509,11 @@ void sendErrorResponse(RequestInfo *pRI, RIL_Errno err) {
 
 /**
  * Copies over src to dest. If memory allocation fails, responseFunction() is called for the
- * request with error RIL_E_NO_MEMORY.
+ * request with error RIL_E_NO_MEMORY. The size() method is used to determine the size of the
+ * destination buffer into which the HIDL string is copied. If there is a discrepancy between
+ * the string length reported by the size() method, and the length of the string returned by
+ * the c_str() method, the function will return false indicating a failure.
+ *
  * Returns true on success, and false on failure.
  */
 bool copyHidlStringToRil(char **dest, const hidl_string &src, RequestInfo *pRI, bool allowEmpty) {
@@ -524,7 +528,15 @@ bool copyHidlStringToRil(char **dest, const hidl_string &src, RequestInfo *pRI, 
         sendErrorResponse(pRI, RIL_E_NO_MEMORY);
         return false;
     }
-    strncpy(*dest, src.c_str(), len + 1);
+    if (strlcpy(*dest, src.c_str(), len + 1) >= (len + 1)) {
+        RLOGE("Copy of the HIDL string has been truncated, as "
+              "the string length reported by size() does not "
+              "match the length of string returned by c_str().");
+        free(*dest);
+        *dest = NULL;
+        sendErrorResponse(pRI, RIL_E_INTERNAL_ERR);
+        return false;
+    }
     return true;
 }
 
@@ -2634,7 +2646,7 @@ Return<void> RadioImpl::setRadioCapability(int32_t serial, const RadioCapability
     rilRc.phase = (int) rc.phase;
     rilRc.rat = (int) rc.raf;
     rilRc.status = (int) rc.status;
-    strncpy(rilRc.logicalModemUuid, rc.logicalModemUuid.c_str(), MAX_UUID_LENGTH);
+    strlcpy(rilRc.logicalModemUuid, rc.logicalModemUuid.c_str(), sizeof(rilRc.logicalModemUuid));
 
     CALL_ONREQUEST(pRI->pCI->requestNumber, &rilRc, sizeof(rilRc), pRI, mSlotId);
 
@@ -3006,7 +3018,7 @@ int radio::getIccCardStatusResponse(int slotId,
     if (radioService[slotId]->mRadioResponse != NULL) {
         RadioResponseInfo responseInfo = {};
         populateResponseInfo(responseInfo, serial, responseType, e);
-        CardStatus cardStatus = {};
+        CardStatus cardStatus = {CardState::ABSENT, PinState::UNKNOWN, -1, -1, -1, {}};
         RIL_CardStatus_v6 *p_cur = ((RIL_CardStatus_v6 *) response);
         if (response == NULL || responseLen != sizeof(RIL_CardStatus_v6)
                 || p_cur->gsm_umts_subscription_app_index >= p_cur->num_applications
@@ -3559,6 +3571,11 @@ void fillCellIdentityResponse(CellIdentity &cellIdentity, RIL_CellIdentity_v16 &
                     std::to_string(rilCellIdentity.cellIdentityGsm.mcc);
             cellIdentity.cellIdentityGsm[0].mnc =
                     ril::util::mnc::decode(rilCellIdentity.cellIdentityGsm.mnc);
+
+            if (cellIdentity.cellIdentityGsm[0].mcc == "-1") {
+                cellIdentity.cellIdentityGsm[0].mcc = "";
+            }
+
             cellIdentity.cellIdentityGsm[0].lac = rilCellIdentity.cellIdentityGsm.lac;
             cellIdentity.cellIdentityGsm[0].cid = rilCellIdentity.cellIdentityGsm.cid;
             cellIdentity.cellIdentityGsm[0].arfcn = rilCellIdentity.cellIdentityGsm.arfcn;
@@ -3572,6 +3589,11 @@ void fillCellIdentityResponse(CellIdentity &cellIdentity, RIL_CellIdentity_v16 &
                     std::to_string(rilCellIdentity.cellIdentityWcdma.mcc);
             cellIdentity.cellIdentityWcdma[0].mnc =
                     ril::util::mnc::decode(rilCellIdentity.cellIdentityWcdma.mnc);
+
+            if (cellIdentity.cellIdentityWcdma[0].mcc == "-1") {
+                cellIdentity.cellIdentityWcdma[0].mcc = "";
+            }
+
             cellIdentity.cellIdentityWcdma[0].lac = rilCellIdentity.cellIdentityWcdma.lac;
             cellIdentity.cellIdentityWcdma[0].cid = rilCellIdentity.cellIdentityWcdma.cid;
             cellIdentity.cellIdentityWcdma[0].psc = rilCellIdentity.cellIdentityWcdma.psc;
@@ -3596,6 +3618,11 @@ void fillCellIdentityResponse(CellIdentity &cellIdentity, RIL_CellIdentity_v16 &
                     std::to_string(rilCellIdentity.cellIdentityLte.mcc);
             cellIdentity.cellIdentityLte[0].mnc =
                     ril::util::mnc::decode(rilCellIdentity.cellIdentityLte.mnc);
+
+            if (cellIdentity.cellIdentityLte[0].mcc == "-1") {
+                cellIdentity.cellIdentityLte[0].mcc = "";
+            }
+
             cellIdentity.cellIdentityLte[0].ci = rilCellIdentity.cellIdentityLte.ci;
             cellIdentity.cellIdentityLte[0].pci = rilCellIdentity.cellIdentityLte.pci;
             cellIdentity.cellIdentityLte[0].tac = rilCellIdentity.cellIdentityLte.tac;
@@ -3609,6 +3636,11 @@ void fillCellIdentityResponse(CellIdentity &cellIdentity, RIL_CellIdentity_v16 &
                     std::to_string(rilCellIdentity.cellIdentityTdscdma.mcc);
             cellIdentity.cellIdentityTdscdma[0].mnc =
                     ril::util::mnc::decode(rilCellIdentity.cellIdentityTdscdma.mnc);
+
+            if (cellIdentity.cellIdentityTdscdma[0].mcc == "-1") {
+                cellIdentity.cellIdentityTdscdma[0].mcc = "";
+            }
+
             cellIdentity.cellIdentityTdscdma[0].lac = rilCellIdentity.cellIdentityTdscdma.lac;
             cellIdentity.cellIdentityTdscdma[0].cid = rilCellIdentity.cellIdentityTdscdma.cid;
             cellIdentity.cellIdentityTdscdma[0].cpid = rilCellIdentity.cellIdentityTdscdma.cpid;
@@ -3742,6 +3774,14 @@ void fillCellIdentityFromDataRegStateResponseString(CellIdentity &cellIdentity,
             /* valid CID are hexstrings in the range 0x00000000 - 0xffffffff */
             rilCellIdentity.cellIdentityGsm.cid =
                     convertResponseHexStringEntryToInt(response, 2, numStrings);
+
+            if (numStrings >= 13) {
+                rilCellIdentity.cellIdentityGsm.mcc =
+                        convertResponseStringEntryToInt(response, 11, numStrings);
+
+                rilCellIdentity.cellIdentityGsm.mnc =
+                        convertResponseStringEntryToInt(response, 12, numStrings);
+            }
             break;
         }
         case RIL_CELL_INFO_TYPE_WCDMA: {
@@ -3752,6 +3792,14 @@ void fillCellIdentityFromDataRegStateResponseString(CellIdentity &cellIdentity,
             /* valid CID are hexstrings in the range 0x00000000 - 0xffffffff */
             rilCellIdentity.cellIdentityWcdma.cid =
                     convertResponseHexStringEntryToInt(response, 2, numStrings);
+
+            if (numStrings >= 13) {
+                rilCellIdentity.cellIdentityWcdma.mcc =
+                        convertResponseStringEntryToInt(response, 11, numStrings);
+
+                rilCellIdentity.cellIdentityWcdma.mnc =
+                        convertResponseStringEntryToInt(response, 12, numStrings);
+            }
             break;
         }
         case RIL_CELL_INFO_TYPE_TD_SCDMA:{
@@ -3762,6 +3810,14 @@ void fillCellIdentityFromDataRegStateResponseString(CellIdentity &cellIdentity,
             /* valid CID are hexstrings in the range 0x00000000 - 0xffffffff */
             rilCellIdentity.cellIdentityTdscdma.cid =
                     convertResponseHexStringEntryToInt(response, 2, numStrings);
+
+            if (numStrings >= 13) {
+                rilCellIdentity.cellIdentityTdscdma.mcc =
+                        convertResponseStringEntryToInt(response, 11, numStrings);
+
+                rilCellIdentity.cellIdentityTdscdma.mnc =
+                        convertResponseStringEntryToInt(response, 12, numStrings);
+            }
             break;
         }
         case RIL_CELL_INFO_TYPE_LTE: {
@@ -3771,6 +3827,14 @@ void fillCellIdentityFromDataRegStateResponseString(CellIdentity &cellIdentity,
                     convertResponseStringEntryToInt(response, 7, numStrings);
             rilCellIdentity.cellIdentityLte.ci =
                     convertResponseStringEntryToInt(response, 8, numStrings);
+
+            if (numStrings >= 13) {
+                rilCellIdentity.cellIdentityLte.mcc =
+                        convertResponseStringEntryToInt(response, 11, numStrings);
+
+                rilCellIdentity.cellIdentityLte.mnc =
+                        convertResponseStringEntryToInt(response, 12, numStrings);
+            }
             break;
         }
         default: {
@@ -3861,7 +3925,7 @@ int radio::getDataRegistrationStateResponse(int slotId,
             if (e == RIL_E_SUCCESS) responseInfo.error = RadioError::INVALID_RESPONSE;
         } else if (s_vendorFunctions->version <= 14) {
             int numStrings = responseLen / sizeof(char *);
-            if ((numStrings != 6) && (numStrings != 11)) {
+            if ((numStrings != 6) && (numStrings != 11) && (numStrings != 13)) {
                 RLOGE("getDataRegistrationStateResponse Invalid response: NULL");
                 if (e == RIL_E_SUCCESS) responseInfo.error = RadioError::INVALID_RESPONSE;
             } else {
@@ -7094,6 +7158,10 @@ void convertRilSignalStrengthToHalV10(void *response, size_t responseLen,
 
     signalStrength.gw.signalStrength = rilSignalStrength->GW_SignalStrength.signalStrength;
     signalStrength.gw.bitErrorRate = rilSignalStrength->GW_SignalStrength.bitErrorRate;
+    // RIL_SignalStrength_v10 not support gw.timingAdvance. Set to INT_MAX as
+    // invalid value.
+    signalStrength.gw.timingAdvance = INT_MAX;
+
     signalStrength.cdma.dbm = rilSignalStrength->CDMA_SignalStrength.dbm;
     signalStrength.cdma.ecio = rilSignalStrength->CDMA_SignalStrength.ecio;
     signalStrength.evdo.dbm = rilSignalStrength->EVDO_SignalStrength.dbm;
